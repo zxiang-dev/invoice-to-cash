@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Invoice to Cash</title>
+  <meta name="description" content="Completed jobs become checked, approved invoices; customer payments are matched back to them and posted.">
+  <link rel="stylesheet" href="assets/styles.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/sql.js@1.14.2/dist/sql-wasm.js"></script>
+  <script type="module" src="assets/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <nav class="tabs" role="tablist" aria-label="Workflows">
+        <button class="tab" role="tab" type="button" id="tab-approval" data-view="approval" aria-controls="view-approval" aria-selected="true"><span class="tab-num">1</span><span class="tab-long">Invoice approval</span><span class="tab-short">Approval</span></button>
+        <button class="tab" role="tab" type="button" id="tab-matching" data-view="matching" aria-controls="view-matching" aria-selected="false"><span class="tab-num">2</span><span class="tab-long">Payment matching</span><span class="tab-short">Matching</span></button>
+      </nav>
+      <div class="topbar-tools">
+        <span class="db-status" id="db-status"><span class="dot"></span><span class="status-text">Loading…</span></span>
+        <button class="btn btn-ghost btn-sm" id="reset" type="button">Reset</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="view" id="view-approval" role="tabpanel" aria-labelledby="tab-approval">
+      <p class="intro">Completed jobs are drafted into invoices and checked for duplicates and wrong amounts; clean ones go straight out, the rest wait for the right person.</p>
+
+      <ol class="pipeline" id="a-pipeline" aria-label="Approval steps">
+        <li data-step="job"><span class="pl-num">1</span><span class="pl-name">Job logged</span><span class="pl-sub">Waiting</span></li>
+        <li data-step="draft"><span class="pl-num">2</span><span class="pl-name">Drafted</span><span class="pl-sub">—</span></li>
+        <li data-step="check"><span class="pl-num">3</span><span class="pl-name">Checked</span><span class="pl-sub">—</span></li>
+        <li data-step="approve"><span class="pl-num">4</span><span class="pl-name">Approved</span><span class="pl-sub">—</span></li>
+        <li data-step="send"><span class="pl-num">5</span><span class="pl-name">Sent</span><span class="pl-sub">—</span></li>
+        <li data-step="paid"><span class="pl-num">6</span><span class="pl-name">Paid</span><span class="pl-sub">—</span></li>
+      </ol>
+
+      <div class="rolebar">
+        <span class="rolebar-label">View as</span>
+        <div class="seg" id="roles" role="group" aria-label="View as">
+          <button type="button" data-role="crew" aria-pressed="true">Crew</button>
+          <button type="button" data-role="bookkeeper" aria-pressed="false">Bookkeeper <span class="badge badge-hot" data-count="fix" hidden></span></button>
+          <button type="button" data-role="approver" aria-pressed="false">Approver <span class="badge badge-hot" data-count="approval" hidden></span></button>
+        </div>
+        <p class="role-note" id="role-note"></p>
+      </div>
+      <p class="nudge" id="nudge" hidden></p>
+
+      <div class="board">
+        <section class="panel col-5" data-roles="crew" aria-labelledby="h-job">
+          <header class="panel-head">
+            <h2 id="h-job">Log a completed job</h2>
+          </header>
+          <div class="chips" id="job-samples" role="group" aria-label="Sample jobs"></div>
+          <p class="hint" id="job-hint"></p>
+          <div class="job-form form" id="job-form">
+            <label class="field"><span>Customer</span><select id="j-customer"></select></label>
+            <label class="field"><span>Purchase order</span><input id="j-po" class="mono" list="po-list" autocomplete="off"></label>
+            <p class="c-hint wide" id="j-po-hint"></p>
+            <label class="field wide"><span>Work done</span><input id="j-desc" autocomplete="off"></label>
+            <label class="field"><span>Hours</span><input id="j-hours" class="mono" inputmode="decimal" autocomplete="off"></label>
+            <label class="field"><span>Materials ($)</span><input id="j-materials" class="mono" inputmode="decimal" placeholder="0.00" autocomplete="off"></label>
+          </div>
+          <datalist id="po-list"></datalist>
+          <div class="actions">
+            <button class="btn btn-primary" id="log-job" type="button" disabled>Log job</button>
+          </div>
+        </section>
+
+        <section class="panel col-7" data-roles="crew" aria-labelledby="h-my-jobs">
+          <header class="panel-head">
+            <h2 id="h-my-jobs">Jobs</h2>
+          </header>
+          <div class="table-wrap"><table class="grid" id="my-jobs"></table></div>
+        </section>
+
+        <section class="panel col-5" data-roles="bookkeeper" hidden aria-labelledby="h-fix">
+          <header class="panel-head">
+            <h2 id="h-fix">To fix</h2>
+          </header>
+          <div class="queue" id="fix-queue"></div>
+        </section>
+
+        <section class="panel col-5" data-roles="approver" hidden aria-labelledby="h-approve">
+          <header class="panel-head">
+            <h2 id="h-approve">Awaiting approval</h2>
+          </header>
+          <div class="queue" id="approval-queue"></div>
+          <details class="policy">
+            <summary>Approval policy</summary>
+            <div class="policy-body">
+              <label class="field-row">
+                <span>Auto-approve and send clean invoices up to</span>
+                <span class="money-input">$<input id="limit" type="number" min="0" step="100" value="5000"></span>
+              </label>
+            </div>
+          </details>
+        </section>
+
+        <section class="panel col-7 row-2" data-roles="bookkeeper approver" hidden aria-labelledby="h-register">
+          <header class="panel-head">
+            <h2 id="h-register">Invoices</h2>
+          </header>
+          <div class="table-wrap"><table class="grid" id="register"></table></div>
+        </section>
+
+        <section class="panel col-5" data-roles="bookkeeper approver" hidden aria-labelledby="h-a-audit">
+          <header class="panel-head">
+            <h2 id="h-a-audit">Audit trail</h2>
+          </header>
+          <ol class="audit" id="a-audit"></ol>
+        </section>
+      </div>
+    </section>
+
+    <section class="view" id="view-matching" role="tabpanel" aria-labelledby="tab-matching" hidden>
+      <p class="intro">Remittance advices are read, each line is matched to an open invoice, certain matches are posted to the ledger, and everything else goes to review.</p>
+
+      <ol class="pipeline" id="pipeline" aria-label="Workflow steps">
+        <li data-step="inbox"><span class="pl-num">1</span><span class="pl-name">Inbox</span><span class="pl-sub">Waiting</span></li>
+        <li data-step="extract"><span class="pl-num">2</span><span class="pl-name">Extract</span><span class="pl-sub">—</span></li>
+        <li data-step="match"><span class="pl-num">3</span><span class="pl-name">Match</span><span class="pl-sub">—</span></li>
+        <li data-step="review"><span class="pl-num">4</span><span class="pl-name">Review</span><span class="pl-sub">—</span></li>
+        <li data-step="post"><span class="pl-num">5</span><span class="pl-name">Post</span><span class="pl-sub">—</span></li>
+        <li data-step="report"><span class="pl-num">6</span><span class="pl-name">Report</span><span class="pl-sub">—</span></li>
+      </ol>
+
+      <div class="board">
+        <section class="panel p-inbox" aria-labelledby="h-inbox">
+          <header class="panel-head">
+            <h2 id="h-inbox"><span class="step-tag">1</span>Inbox</h2>
+          </header>
+          <div class="chips" id="presets" role="group" aria-label="Remittances"></div>
+          <p class="hint" id="preset-hint"></p>
+          <label class="sr-only" for="remittance">Remittance email</label>
+          <textarea id="remittance" spellcheck="false" rows="14"></textarea>
+          <div id="custom" class="custom form" hidden></div>
+          <datalist id="open-invoices"></datalist>
+          <div class="actions">
+            <button class="btn btn-primary" id="process" type="button" disabled>Process remittance</button>
+          </div>
+          <details class="policy">
+            <summary>Matching policy</summary>
+            <div class="policy-body">
+              <label class="field-row">
+                <span>Auto write-off short payments up to</span>
+                <span class="money-input">$<input id="tolerance" type="number" min="0" step="1" value="5"></span>
+              </label>
+              <label class="field-row check">
+                <input id="autofuzzy" type="checkbox">
+                <span>Auto-apply look-alike references when the amount matches exactly</span>
+              </label>
+            </div>
+          </details>
+        </section>
+
+        <section class="panel p-lines" aria-labelledby="h-lines">
+          <header class="panel-head">
+            <h2 id="h-lines"><span class="step-tag">2–3</span>Extracted &amp; matched</h2>
+          </header>
+          <div id="extraction" class="empty">Process a remittance to see what was read and how each line was matched.</div>
+          <div id="lines"></div>
+          <div id="journal"></div>
+        </section>
+
+        <section class="panel p-review" aria-labelledby="h-review">
+          <header class="panel-head">
+            <h2 id="h-review"><span class="step-tag">4</span>Review queue <span class="badge" id="review-count">0</span></h2>
+          </header>
+          <div id="review"></div>
+        </section>
+
+        <section class="panel p-ledger" aria-labelledby="h-ledger">
+          <header class="panel-head">
+            <h2 id="h-ledger"><span class="step-tag">5</span>Invoice ledger</h2>
+          </header>
+          <div class="table-wrap"><table class="grid" id="ledger"></table></div>
+        </section>
+
+        <section class="panel p-report" aria-labelledby="h-report">
+          <header class="panel-head">
+            <h2 id="h-report"><span class="step-tag">6</span>Receivables</h2>
+          </header>
+          <div class="kpis" id="kpis"></div>
+          <h3 class="sub-head">Aging of open balances</h3>
+          <div class="aging" id="aging"></div>
+          <h3 class="sub-head">Unapplied cash</h3>
+          <div id="unapplied"></div>
+        </section>
+
+        <section class="panel p-audit" aria-labelledby="h-audit">
+          <header class="panel-head">
+            <h2 id="h-audit">Audit trail</h2>
+          </header>
+          <ol class="audit" id="audit"></ol>
+        </section>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
